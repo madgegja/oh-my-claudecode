@@ -19,6 +19,7 @@ import { execSync } from 'child_process';
 import { createHash } from 'crypto';
 import https from 'https';
 import { validateAnthropicBaseUrl } from '../utils/ssrf-guard.js';
+import { withFileLock, lockPathFor } from '../lib/file-lock.js';
 import type { RateLimits, UsageResult, UsageErrorReason } from './types.js';
 
 // Cache configuration
@@ -27,6 +28,7 @@ const CACHE_TTL_FAILURE_MS = 15 * 1000; // 15 seconds for failures
 const CACHE_TTL_RATE_LIMITED_MS = 120 * 1000; // 2 minutes base for 429
 const MAX_RATE_LIMITED_BACKOFF_MS = 600 * 1000; // 10 minutes max
 const API_TIMEOUT_MS = 10000;
+const LOCK_STALE_MS = API_TIMEOUT_MS + 5000; // 15s: API timeout + margin
 const TOKEN_REFRESH_URL_HOSTNAME = 'platform.claude.com';
 const TOKEN_REFRESH_URL_PATH = '/v1/oauth/token';
 
@@ -655,6 +657,39 @@ export async function getUsage(): Promise<UsageResult> {
     return { rateLimits: cache.data, error: cachedError };
   }
 
+  // Cache expired → try to acquire lock (thundering herd prevention)
+  // Only one session fetches at a time; others return stale cache.
+  // Deliberately no timeoutMs: fail immediately and serve stale cache
+  // rather than blocking HUD render.
+  try {
+    return await withFileLock(
+      lockPathFor(getCachePath()),
+      () => fetchUsageWithLock(isZai, authToken),
+      { staleLockMs: LOCK_STALE_MS },
+    );
+  } catch (err) {
+    // Only fall back to stale cache for lock contention
+    if (err instanceof Error && err.message.startsWith('Failed to acquire file lock')) {
+      if (cache?.data) {
+        return { rateLimits: cache.data };
+      }
+      return { rateLimits: null, error: 'network' };
+    }
+    // Callback threw unexpectedly — report as network error
+    return { rateLimits: null, error: 'network' };
+  }
+}
+
+/**
+ * Perform the actual API fetch (called while holding the file lock).
+ * Re-reads cache under lock to get fresh rateLimitedCount for accurate backoff.
+ */
+async function fetchUsageWithLock(
+  isZai: boolean,
+  authToken: string | undefined,
+): Promise<UsageResult> {
+  // Re-read cache under lock for accurate rateLimitedCount/stale data
+  const cache = readCache();
   // z.ai path (must precede OAuth check to avoid stale Anthropic credentials)
   if (isZai && authToken) {
     const result = await fetchUsageFromZai();
