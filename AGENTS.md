@@ -389,3 +389,17 @@ Recommended mode fields:
 ## Setup
 
 Run `omx setup` to install all components. Run `omx doctor` to verify installation.
+
+---
+
+## Review guidelines
+
+- Flag breaking changes to public API or CLI interfaces as P0.
+- Verify error handling on all async operations (missing try/catch, unhandled rejections).
+- Check for hardcoded secrets, tokens, or credentials — flag as P0.
+- Ensure new dependencies are justified and not duplicating existing functionality.
+- TypeScript: verify proper type annotations, no unsafe `any` without justification.
+- Test coverage: flag new logic paths that lack corresponding tests.
+- Configuration changes must be backward-compatible or include migration notes.
+- MCP tool definitions must validate inputs and handle timeouts gracefully.
+- Agent orchestration changes: verify state machine transitions are complete and recoverable.
