@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync } from 'fs';
 import { dirname, join } from 'path';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import { KEYWORD_DETECTOR_SCRIPT_NODE, getHookScripts } from '../hooks.js';
 const __filename = fileURLToPath(import.meta.url);
@@ -13,10 +14,10 @@ const STALE_PIPELINE_SNIPPETS = [
     "'pipeline']);",
     "'swarm', 'pipeline'], sessionId);",
 ];
-function runKeywordHook(scriptPath, prompt) {
+function runKeywordHook(scriptPath, input) {
     return JSON.parse(execFileSync('node', [scriptPath], {
         cwd: packageRoot,
-        input: JSON.stringify({ prompt }),
+        input: typeof input === 'string' ? JSON.stringify({ prompt: input }) : JSON.stringify(input),
         encoding: 'utf-8',
     }));
 }
@@ -71,6 +72,38 @@ describe('keyword-detector packaged artifacts', () => {
         const pluginResult = runKeywordHook(pluginPath, 'team 3 agents fix lint');
         expect(templateResult).toEqual({ continue: true, suppressOutput: true });
         expect(pluginResult).toEqual({ continue: true, suppressOutput: true });
+    });
+    it('writes project_path metadata for ultrawork state in both packaged artifacts', () => {
+        const templatePath = join(packageRoot, 'templates', 'hooks', 'keyword-detector.mjs');
+        const pluginPath = join(packageRoot, 'scripts', 'keyword-detector.mjs');
+        const tempHome = mkdtempSync(join(tmpdir(), 'omc-hook-home-'));
+        const tempProject = mkdtempSync(join(tmpdir(), 'omc-hook-project-'));
+        try {
+            const env = {
+                ...process.env,
+                HOME: tempHome,
+                USERPROFILE: tempHome,
+            };
+            execFileSync('node', [templatePath], {
+                cwd: packageRoot,
+                env,
+                input: JSON.stringify({ prompt: 'ulw investigate cleanup', cwd: tempProject }),
+                encoding: 'utf-8',
+            });
+            execFileSync('node', [pluginPath], {
+                cwd: packageRoot,
+                env,
+                input: JSON.stringify({ prompt: 'ulw investigate cleanup', cwd: tempProject }),
+                encoding: 'utf-8',
+            });
+            const statePath = join(tempProject, '.omc', 'state', 'ultrawork-state.json');
+            const state = JSON.parse(readFileSync(statePath, 'utf-8'));
+            expect(state.project_path).toBe(tempProject);
+        }
+        finally {
+            rmSync(tempHome, { recursive: true, force: true });
+            rmSync(tempProject, { recursive: true, force: true });
+        }
     });
 });
 //# sourceMappingURL=hook-templates.test.js.map

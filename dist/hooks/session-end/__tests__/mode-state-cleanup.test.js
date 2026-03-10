@@ -118,5 +118,66 @@ describe('processSessionEnd mode state cleanup (issue #1427)', () => {
         expect(fs.existsSync(sessionStatePath)).toBe(false);
         expect(fs.existsSync(legacyStatePath)).toBe(false);
     });
+    it('removes transient session-end artifacts for the ending session while preserving newer or unrelated files', async () => {
+        const sessionId = 'pid-1510-current';
+        const otherSessionId = 'pid-1510-other';
+        const stateDir = path.join(tmpDir, '.omc', 'state');
+        const checkpointsDir = path.join(stateDir, 'checkpoints');
+        const sessionDir = path.join(stateDir, 'sessions', sessionId);
+        const otherSessionDir = path.join(stateDir, 'sessions', otherSessionId);
+        fs.mkdirSync(checkpointsDir, { recursive: true });
+        fs.mkdirSync(sessionDir, { recursive: true });
+        fs.mkdirSync(otherSessionDir, { recursive: true });
+        const oldCheckpoint = path.join(checkpointsDir, 'old-checkpoint.json');
+        const freshCheckpoint = path.join(checkpointsDir, 'fresh-checkpoint.json');
+        fs.writeFileSync(oldCheckpoint, '{}', 'utf-8');
+        fs.writeFileSync(freshCheckpoint, '{}', 'utf-8');
+        const staleTime = Date.now() - (25 * 60 * 60 * 1000);
+        fs.utimesSync(oldCheckpoint, staleTime / 1000, staleTime / 1000);
+        const removedProjectFiles = [
+            'subagent-tracking.json',
+            'last-tool-error.json',
+            'hud-state.json',
+            'hud-stdin-cache.json',
+            'idle-notif-cooldown.json',
+            'team-stop-breaker.json',
+            'team-pipeline-stop-breaker.json',
+            `agent-replay-${sessionId}.jsonl`,
+        ];
+        for (const file of removedProjectFiles) {
+            fs.writeFileSync(path.join(stateDir, file), '{}', 'utf-8');
+        }
+        fs.writeFileSync(path.join(stateDir, `agent-replay-${otherSessionId}.jsonl`), '{}', 'utf-8');
+        const removedSessionFiles = [
+            'cancel-signal-state.json',
+            'idle-notif-cooldown.json',
+            'team-stop-breaker.json',
+            'team-pipeline-stop-breaker.json',
+        ];
+        for (const file of removedSessionFiles) {
+            fs.writeFileSync(path.join(sessionDir, file), '{}', 'utf-8');
+        }
+        fs.writeFileSync(path.join(otherSessionDir, 'cancel-signal-state.json'), '{}', 'utf-8');
+        await processSessionEnd({
+            session_id: sessionId,
+            transcript_path: transcriptPath,
+            cwd: tmpDir,
+            permission_mode: 'default',
+            hook_event_name: 'SessionEnd',
+            reason: 'clear',
+        });
+        for (const file of removedProjectFiles) {
+            expect(fs.existsSync(path.join(stateDir, file)), `expected ${file} to be removed`).toBe(false);
+        }
+        for (const file of removedSessionFiles) {
+            expect(fs.existsSync(path.join(sessionDir, file)), `expected session file ${file} to be removed`).toBe(false);
+        }
+        expect(fs.existsSync(oldCheckpoint)).toBe(false);
+        expect(fs.existsSync(freshCheckpoint)).toBe(true);
+        expect(fs.existsSync(path.join(stateDir, `agent-replay-${otherSessionId}.jsonl`))).toBe(true);
+        expect(fs.existsSync(path.join(otherSessionDir, 'cancel-signal-state.json'))).toBe(true);
+        expect(fs.existsSync(sessionDir)).toBe(false);
+        expect(fs.existsSync(otherSessionDir)).toBe(true);
+    });
 });
 //# sourceMappingURL=mode-state-cleanup.test.js.map

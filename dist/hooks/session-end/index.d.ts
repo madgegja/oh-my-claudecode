@@ -42,7 +42,7 @@ export declare function recordSessionMetrics(directory: string, input: SessionEn
 /**
  * Clean up transient state files
  */
-export declare function cleanupTransientState(directory: string): number;
+export declare function cleanupTransientState(directory: string, sessionId?: string): number;
 /**
  * Extract python_repl research session IDs from transcript JSONL.
  * These sessions are terminated on SessionEnd to prevent bridge leaks.

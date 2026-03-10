@@ -37,6 +37,19 @@ export interface HookOutput {
 
 type LegacyStopCallbackPlatform = 'file' | 'telegram' | 'discord';
 
+const PROJECT_TRANSIENT_STATE_FILES = new Set([
+  'subagent-tracking.json',
+  'last-tool-error.json',
+  'hud-state.json',
+  'hud-stdin-cache.json',
+  'idle-notif-cooldown.json',
+]);
+
+const SESSION_TRANSIENT_STATE_FILES = new Set([
+  'cancel-signal-state.json',
+  'idle-notif-cooldown.json',
+]);
+
 function hasExplicitNotificationConfig(profileName?: string): boolean {
   const config = getOMCConfig();
 
@@ -216,27 +229,59 @@ export function recordSessionMetrics(directory: string, input: SessionEndInput):
 /**
  * Clean up transient state files
  */
-export function cleanupTransientState(directory: string): number {
+export function cleanupTransientState(directory: string, sessionId?: string): number {
   let filesRemoved = 0;
   const omcDir = getOmcRoot(directory);
+  const stateDir = path.join(omcDir, 'state');
 
   if (!fs.existsSync(omcDir)) {
     return filesRemoved;
   }
 
-  // Remove transient agent tracking
-  const trackingPath = path.join(omcDir, 'state', 'subagent-tracking.json');
-  if (fs.existsSync(trackingPath)) {
+  const removeFile = (filePath: string) => {
+    if (!fs.existsSync(filePath)) {
+      return;
+    }
+
     try {
-      fs.unlinkSync(trackingPath);
+      fs.unlinkSync(filePath);
       filesRemoved++;
     } catch (_error) {
       // Ignore removal errors
     }
+  };
+
+  if (fs.existsSync(stateDir)) {
+    try {
+      const stateEntries = fs.readdirSync(stateDir, { withFileTypes: true });
+
+      for (const entry of stateEntries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+
+        if (
+          PROJECT_TRANSIENT_STATE_FILES.has(entry.name) ||
+          entry.name.endsWith('-stop-breaker.json')
+        ) {
+          removeFile(path.join(stateDir, entry.name));
+          continue;
+        }
+
+        if (
+          sessionId &&
+          entry.name === `agent-replay-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_')}.jsonl`
+        ) {
+          removeFile(path.join(stateDir, entry.name));
+        }
+      }
+    } catch (_error) {
+      // Ignore cleanup errors
+    }
   }
 
   // Clean stale checkpoints (older than 24 hours)
-  const checkpointsDir = path.join(omcDir, 'checkpoints');
+  const checkpointsDir = path.join(stateDir, 'checkpoints');
   if (fs.existsSync(checkpointsDir)) {
     const now = Date.now();
     const oneDayAgo = now - 24 * 60 * 60 * 1000;
@@ -279,7 +324,51 @@ export function cleanupTransientState(directory: string): number {
 
   removeTmpFiles(omcDir);
 
+  if (sessionId) {
+    const sessionStateDir = path.join(stateDir, 'sessions', sessionId);
+    if (fs.existsSync(sessionStateDir)) {
+      try {
+        const sessionEntries = fs.readdirSync(sessionStateDir, { withFileTypes: true });
+        for (const entry of sessionEntries) {
+          if (!entry.isFile()) {
+            continue;
+          }
+
+          if (
+            SESSION_TRANSIENT_STATE_FILES.has(entry.name) ||
+            entry.name.endsWith('-stop-breaker.json')
+          ) {
+            removeFile(path.join(sessionStateDir, entry.name));
+          }
+        }
+      } catch (_error) {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
   return filesRemoved;
+}
+
+function cleanupEmptySessionStateDir(directory: string, sessionId?: string): boolean {
+  if (!sessionId) {
+    return false;
+  }
+
+  const sessionStateDir = path.join(getOmcRoot(directory), 'state', 'sessions', sessionId);
+  if (!fs.existsSync(sessionStateDir)) {
+    return false;
+  }
+
+  try {
+    if (fs.readdirSync(sessionStateDir).length > 0) {
+      return false;
+    }
+    fs.rmdirSync(sessionStateDir);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -474,12 +563,13 @@ export async function processSessionEnd(input: SessionEndInput): Promise<HookOut
   exportSessionSummary(directory, metrics);
 
   // Clean up transient state files
-  cleanupTransientState(directory);
+  cleanupTransientState(directory, input.session_id);
 
   // Clean up mode state files to prevent stale state issues
   // This ensures the stop hook won't malfunction in subsequent sessions
   // Pass session_id to only clean up this session's states
   cleanupModeStates(directory, input.session_id);
+  cleanupEmptySessionStateDir(directory, input.session_id);
 
   // Clean up Python REPL bridge sessions used in this transcript (#641).
   // Best-effort only: session end should not fail because cleanup fails.
