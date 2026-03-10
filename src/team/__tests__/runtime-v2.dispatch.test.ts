@@ -196,7 +196,7 @@ describe('runtime v2 startup inbox dispatch', () => {
     expect(requests[0]?.status).toBe('notified');
   });
 
-  it('accepts Claude startup once leader mailbox ack evidence appears', async () => {
+  it('does not treat ACK-only mailbox replies as Claude startup evidence', async () => {
     cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-claude-evidence-ack-'));
 
     mocks.sendToWorker.mockImplementation(async () => {
@@ -222,6 +222,35 @@ describe('runtime v2 startup inbox dispatch', () => {
       workerCount: 1,
       agentTypes: ['claude'],
       tasks: [{ subject: 'Dispatch test', description: 'Verify Claude mailbox ack evidence' }],
+      cwd,
+    });
+
+    expect(runtime.config.workers[0]?.assigned_tasks).toEqual([]);
+    expect(mocks.sendToWorker).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts Claude startup once the worker claims the task', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-claude-evidence-claim-'));
+
+    mocks.sendToWorker.mockImplementation(async () => {
+      const taskDir = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'tasks');
+      const taskPath = join(taskDir, 'task-1.json');
+      const existing = JSON.parse(await readFile(taskPath, 'utf-8'));
+      await writeFile(taskPath, JSON.stringify({
+        ...existing,
+        status: 'in_progress',
+        owner: 'worker-1',
+      }, null, 2), 'utf-8');
+      return true;
+    });
+
+    const { startTeamV2 } = await import('../runtime-v2.js');
+
+    const runtime = await startTeamV2({
+      teamName: 'dispatch-team',
+      workerCount: 1,
+      agentTypes: ['claude'],
+      tasks: [{ subject: 'Dispatch test', description: 'Verify Claude claim evidence' }],
       cwd,
     });
 

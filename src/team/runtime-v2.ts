@@ -319,25 +319,21 @@ interface SpawnV2WorkerResult {
   startupFailureReason?: string;
 }
 
-interface MailboxSnapshot {
-  messages?: Array<{ from_worker?: string }>;
-}
-
 function hasWorkerStatusProgress(status: WorkerStatus, taskId: string): boolean {
   if (status.current_task_id === taskId) return true;
   return ['working', 'blocked', 'done', 'failed'].includes(status.state);
 }
 
-async function hasLeaderMailboxAck(
+async function hasWorkerTaskClaimEvidence(
   teamName: string,
   workerName: string,
   cwd: string,
+  taskId: string,
 ): Promise<boolean> {
   try {
-    const raw = await readFile(absPath(cwd, TeamPaths.mailbox(teamName, 'leader-fixed')), 'utf-8');
-    const mailbox = JSON.parse(raw) as MailboxSnapshot;
-    return Array.isArray(mailbox.messages)
-      && mailbox.messages.some((message) => message?.from_worker === workerName);
+    const raw = await readFile(absPath(cwd, TeamPaths.taskFile(teamName, taskId)), 'utf-8');
+    const task = JSON.parse(raw) as TeamTask;
+    return task.owner === workerName && ['in_progress', 'completed', 'failed'].includes(task.status);
   } catch {
     return false;
   }
@@ -349,11 +345,11 @@ async function hasClaudeStartupEvidence(
   taskId: string,
   cwd: string,
 ): Promise<boolean> {
-  const [hasAck, status] = await Promise.all([
-    hasLeaderMailboxAck(teamName, workerName, cwd),
+  const [hasClaimEvidence, status] = await Promise.all([
+    hasWorkerTaskClaimEvidence(teamName, workerName, cwd, taskId),
     readWorkerStatus(teamName, workerName, cwd),
   ]);
-  return hasAck || hasWorkerStatusProgress(status, taskId);
+  return hasClaimEvidence || hasWorkerStatusProgress(status, taskId);
 }
 
 async function waitForClaudeStartupEvidence(
