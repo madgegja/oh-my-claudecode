@@ -53,10 +53,10 @@ ls -la ~/.claude/CLAUDE.md 2>/dev/null
 grep -q "<!-- OMC:START -->" ~/.claude/CLAUDE.md 2>/dev/null && echo "Has OMC config" || echo "Missing OMC config in CLAUDE.md"
 
 # Check companion files for file-split pattern (e.g. CLAUDE-omc.md)
-ls ~/.claude/CLAUDE-*.md 2>/dev/null
-for f in ~/.claude/CLAUDE-*.md; do
-  [ -f "$f" ] && grep -q "<!-- OMC:START -->" "$f" 2>/dev/null && echo "Has OMC config in companion: $f"
-done
+find "$HOME/.claude" -maxdepth 1 -type f -name 'CLAUDE-*.md' -print 2>/dev/null
+while IFS= read -r f; do
+  grep -q "<!-- OMC:START -->" "$f" 2>/dev/null && echo "Has OMC config in companion: $f"
+done < <(find "$HOME/.claude" -maxdepth 1 -type f -name 'CLAUDE-*.md' -print 2>/dev/null)
 
 # Check if CLAUDE.md references a companion file
 grep -o "CLAUDE-[^ )]*\.md" ~/.claude/CLAUDE.md 2>/dev/null
