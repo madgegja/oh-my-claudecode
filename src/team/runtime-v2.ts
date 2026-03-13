@@ -220,6 +220,7 @@ export interface StartTeamV2Config {
   tasks: Array<{ subject: string; description: string; owner?: string; blocked_by?: string[] }>;
   cwd: string;
   newWindow?: boolean;
+  workerRoles?: string[];
   roleName?: string;
   rolePrompt?: string;
 }
@@ -636,7 +637,8 @@ export async function startTeamV2(config: StartTeamV2Config): Promise<TeamRuntim
   const workersInfo: WorkerInfo[] = workerNames.map((wName, i) => ({
     name: wName,
     index: i + 1,
-    role: (agentTypes[i % agentTypes.length] ?? agentTypes[0] ?? 'claude') as string,
+    role: config.workerRoles?.[i]
+      ?? (agentTypes[i % agentTypes.length] ?? agentTypes[0] ?? 'claude') as string,
     assigned_tasks: [] as string[],
     working_dir: leaderCwd,
   }));

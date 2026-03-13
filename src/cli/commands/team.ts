@@ -14,6 +14,7 @@ import {
   executeTeamApiOperation,
   type TeamApiOperation,
 } from '../../team/api-interop.js';
+import type { CliAgentType } from '../../team/model-contract.js';
 
 const HELP_TOKENS = new Set(['--help', '-h', 'help']);
 const MIN_WORKER_COUNT = 1;
@@ -115,9 +116,15 @@ function slugifyTask(task: string): string {
     .slice(0, 30) || 'team-task';
 }
 
+export interface ParsedWorkerSpec {
+  agentType: string;
+  role?: string;
+}
+
 export interface ParsedTeamArgs {
   workerCount: number;
   agentTypes: string[];
+  workerSpecs: ParsedWorkerSpec[];
   role?: string;
   task: string;
   teamName: string;
@@ -175,6 +182,7 @@ export function parseTeamArgs(tokens: string[]): ParsedTeamArgs {
   const args = [...tokens];
   let workerCount = 3;
   let agentTypes: string[] = [];
+  let workerSpecs: ParsedWorkerSpec[] = [];
   let json = false;
   let newWindow = false;
 
@@ -217,6 +225,7 @@ export function parseTeamArgs(tokens: string[]): ParsedTeamArgs {
         workerCount += seg.count;
         for (let i = 0; i < seg.count; i++) {
           agentTypes.push(seg.type);
+          workerSpecs.push({ agentType: seg.type, ...(seg.role ? { role: seg.role } : {}) });
         }
       }
       if (workerCount > MAX_WORKER_COUNT) {
@@ -243,6 +252,7 @@ export function parseTeamArgs(tokens: string[]): ParsedTeamArgs {
       const type = match[2] || 'claude';
       if (match[3]) role = match[3];
       agentTypes = Array.from({ length: workerCount }, () => type);
+      workerSpecs = Array.from({ length: workerCount }, () => ({ agentType: type, ...(role ? { role } : {}) }));
       filteredArgs.shift();
     }
   }
@@ -250,6 +260,7 @@ export function parseTeamArgs(tokens: string[]): ParsedTeamArgs {
   // Default: 3 claude workers if no spec matched
   if (agentTypes.length === 0) {
     agentTypes = Array.from({ length: workerCount }, () => 'claude');
+    workerSpecs = Array.from({ length: workerCount }, () => ({ agentType: 'claude' }));
   }
 
   const task = filteredArgs.join(' ').trim();
@@ -258,8 +269,23 @@ export function parseTeamArgs(tokens: string[]): ParsedTeamArgs {
   }
 
   const teamName = slugifyTask(task);
-  return { workerCount, agentTypes, role, task, teamName, json, newWindow };
+  return { workerCount, agentTypes, workerSpecs, role, task, teamName, json, newWindow };
 }
+
+export function buildStartupTasks(parsed: ParsedTeamArgs): Array<{ subject: string; description: string; owner?: string }> {
+  return Array.from({ length: parsed.workerCount }, (_, index) => {
+    const workerSpec = parsed.workerSpecs[index];
+    const roleLabel = workerSpec?.role ? ` (${workerSpec.role})` : '';
+    return {
+      subject: parsed.workerCount === 1
+        ? parsed.task.slice(0, 80)
+        : `Worker ${index + 1}${roleLabel}: ${parsed.task}`.slice(0, 80),
+      description: parsed.task,
+      ...(workerSpec?.role ? { owner: `worker-${index + 1}` } : {}),
+    };
+  });
+}
+
 
 function sampleValueForField(field: string): unknown {
   switch (field) {
@@ -389,16 +415,8 @@ function parseTeamApiArgs(args: string[]): {
 async function handleTeamStart(parsed: ParsedTeamArgs, cwd: string): Promise<void> {
   await assertTeamSpawnAllowed(cwd);
 
-  // Create tasks from the task description (one per worker, like OMX)
-  const tasks: Array<{ subject: string; description: string; owner?: string }> = [];
-  for (let i = 0; i < parsed.workerCount; i++) {
-    tasks.push({
-      subject: parsed.workerCount === 1
-        ? parsed.task.slice(0, 80)
-        : `Worker ${i + 1}: ${parsed.task}`.slice(0, 80),
-      description: parsed.task,
-    });
-  }
+  // Create startup tasks from CLI fanout intent, preserving explicit per-worker role routing.
+  const tasks = buildStartupTasks(parsed);
 
   // Load role prompt if a role was specified (e.g., 3:codex:architect)
   let rolePrompt: string | undefined;
@@ -418,6 +436,7 @@ async function handleTeamStart(parsed: ParsedTeamArgs, cwd: string): Promise<voi
       tasks,
       cwd,
       newWindow: parsed.newWindow,
+      workerRoles: parsed.workerSpecs.map((spec) => spec.role ?? spec.agentType),
       ...(rolePrompt ? { roleName: parsed.role, rolePrompt } : {}),
     });
 
@@ -452,7 +471,7 @@ async function handleTeamStart(parsed: ParsedTeamArgs, cwd: string): Promise<voi
   const runtime = await startTeam({
     teamName: parsed.teamName,
     workerCount: parsed.workerCount,
-    agentTypes: parsed.agentTypes as any,
+    agentTypes: parsed.agentTypes as CliAgentType[],
     tasks,
     cwd,
     newWindow: parsed.newWindow,

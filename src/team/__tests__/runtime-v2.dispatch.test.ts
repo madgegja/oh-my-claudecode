@@ -75,7 +75,7 @@ describe('runtime v2 startup inbox dispatch', () => {
     });
     modelContractMocks.isPromptModeAgent.mockReturnValue(false);
     modelContractMocks.getPromptModeArgs.mockImplementation((_agentType: string, instruction: string) => [instruction]);
-    mocks.execFile.mockImplementation((file: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+    mocks.execFile.mockImplementation((_file: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
       if (args[0] === 'split-window') {
         cb(null, '%2\n', '');
         return;
@@ -164,6 +164,30 @@ describe('runtime v2 startup inbox dispatch', () => {
 
     const spawnedWorkers = mocks.spawnWorkerInPane.mock.calls.map((call) => call[2]?.envVars?.OMC_TEAM_WORKER);
     expect(spawnedWorkers).toEqual(['dispatch-team/worker-2', 'dispatch-team/worker-1']);
+  });
+
+
+  it('preserves explicit worker roles in runtime config during startup fanout', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-worker-roles-'));
+    const { startTeamV2 } = await import('../runtime-v2.js');
+
+    const runtime = await startTeamV2({
+      teamName: 'dispatch-team',
+      workerCount: 2,
+      agentTypes: ['codex', 'gemini'],
+      workerRoles: ['architect', 'writer'],
+      tasks: [
+        { subject: 'Worker 1 (architect): draft launch plan', description: 'draft launch plan', owner: 'worker-1' },
+        { subject: 'Worker 2 (writer): draft launch plan', description: 'draft launch plan', owner: 'worker-2' },
+      ],
+      cwd,
+    });
+
+    expect(runtime.config.workers.map((worker) => worker.role)).toEqual(['architect', 'writer']);
+
+    const configPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'config.json');
+    const persisted = JSON.parse(await readFile(configPath, 'utf-8'));
+    expect(persisted.workers.map((worker: { role: string }) => worker.role)).toEqual(['architect', 'writer']);
   });
 
   it('passes through dedicated-window startup requests', async () => {
