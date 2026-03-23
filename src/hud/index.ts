@@ -264,6 +264,7 @@ async function main(watchMode = false, skipInit = false): Promise<void> {
     // Build render context
     const context: HudRenderContext = {
       contextPercent,
+      contextDisplayScope: currentSessionId ?? cwd,
       modelName: getModelName(stdin),
       ralph,
       ultrawork,
