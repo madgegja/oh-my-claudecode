@@ -46,6 +46,28 @@ vi.mock('../tmux-session.js', () => ({
 
 describe('runtime v2 startup inbox dispatch', () => {
   let cwd: string;
+  let nextPaneId = 2;
+
+  async function flushMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async function waitForAssertion(assertion: () => void, timeoutMs = 1000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        assertion();
+        return;
+      } catch (error) {
+        lastError = error;
+        await flushMicrotasks();
+      }
+    }
+    throw lastError;
+  }
 
   beforeEach(() => {
     vi.resetModules();
@@ -82,17 +104,18 @@ describe('runtime v2 startup inbox dispatch', () => {
     modelContractMocks.getPromptModeArgs.mockImplementation((_agentType: string, instruction: string) => [instruction]);
     mocks.execFile.mockImplementation((_file: string, args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
       if (args[0] === 'split-window') {
-        cb(null, '%2\n', '');
+        cb(null, `%${nextPaneId++}\n`, '');
         return;
       }
       cb(null, '', '');
     });
     (mocks.execFile as unknown as Record<PropertyKey, unknown>)[promisify.custom] = async (_file: string, args: string[]) => {
       if (args[0] === 'split-window') {
-        return { stdout: '%2\n', stderr: '' };
+        return { stdout: `%${nextPaneId++}\n`, stderr: '' };
       }
       return { stdout: '', stderr: '' };
     };
+    nextPaneId = 2;
   });
 
   afterEach(async () => {
@@ -418,5 +441,62 @@ describe('runtime v2 startup inbox dispatch', () => {
     );
     expect(runtime.config.workers[0]?.assigned_tasks).toEqual(['1']);
     expect(mocks.sendToWorker).not.toHaveBeenCalled();
+  });
+
+  it('launches all Claude panes before waiting and dispatches the first pane that becomes ready', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-runtime-v2-parallel-startup-'));
+
+    const paneReadyResolvers = new Map<string, (ready: boolean) => void>();
+    mocks.waitForPaneReady.mockImplementation((paneId: string) => new Promise<boolean>((resolve) => {
+      paneReadyResolvers.set(paneId, resolve);
+    }));
+    mocks.sendToWorker.mockImplementation(async (_sessionName: string, paneId: string) => {
+      const taskId = paneId === '%2' ? '1' : '2';
+      const workerName = paneId === '%2' ? 'worker-1' : 'worker-2';
+      const taskPath = join(cwd, '.omc', 'state', 'team', 'dispatch-team', 'tasks', `task-${taskId}.json`);
+      const existing = JSON.parse(await readFile(taskPath, 'utf-8'));
+      await writeFile(taskPath, JSON.stringify({
+        ...existing,
+        status: 'in_progress',
+        owner: workerName,
+      }, null, 2), 'utf-8');
+      return true;
+    });
+
+    const { startTeamV2 } = await import('../runtime-v2.js');
+
+    const startPromise = startTeamV2({
+      teamName: 'dispatch-team',
+      workerCount: 2,
+      agentTypes: ['claude', 'claude'],
+      tasks: [
+        { subject: 'Worker one task', description: 'launch worker one', owner: 'worker-1' },
+        { subject: 'Worker two task', description: 'launch worker two', owner: 'worker-2' },
+      ],
+      cwd,
+    });
+    try {
+      await waitForAssertion(() => {
+        expect(mocks.spawnWorkerInPane).toHaveBeenCalledTimes(2);
+        expect(mocks.waitForPaneReady.mock.calls.map((call) => call[0])).toEqual(['%2', '%3']);
+      });
+
+      paneReadyResolvers.get('%3')?.(true);
+      await waitForAssertion(() => {
+        expect(mocks.sendToWorker).toHaveBeenCalledTimes(1);
+        expect(mocks.sendToWorker.mock.calls[0]?.[1]).toBe('%3');
+      });
+
+      paneReadyResolvers.get('%2')?.(true);
+      const runtime = await startPromise;
+
+      expect(runtime.config.workers[0]?.assigned_tasks).toEqual(['1']);
+      expect(runtime.config.workers[1]?.assigned_tasks).toEqual(['2']);
+      expect(mocks.sendToWorker.mock.calls.map((call) => call[1])).toEqual(['%3', '%2']);
+    } finally {
+      paneReadyResolvers.get('%2')?.(true);
+      paneReadyResolvers.get('%3')?.(true);
+      await startPromise.catch(() => {});
+    }
   });
 });

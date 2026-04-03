@@ -190,6 +190,15 @@ describe('Builtin Skills', () => {
             expect(skill?.template).toContain('trace_timeline');
             expect(skill?.template).toContain('trace_summary');
         });
+        it('routes the team skill through the tmux runtime instead of native Agent(team_name) spawning', () => {
+            const skill = getBuiltinSkill('team');
+            expect(skill).toBeDefined();
+            expect(skill?.description).toContain('tmux');
+            expect(skill?.template).toContain('Launch through `omc team ...`');
+            expect(skill?.template).toContain('pane-ready');
+            expect(skill?.template).toContain('native `Agent(team_name, name)`');
+            expect(skill?.template).not.toContain('Task(team_name="fix-ts-errors", name="worker-1")');
+        });
         it('should retrieve the deep-dive skill with pipeline metadata and 3-point injection', () => {
             const skill = getBuiltinSkill('deep-dive');
             expect(skill).toBeDefined();

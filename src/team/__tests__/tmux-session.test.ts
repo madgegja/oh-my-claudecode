@@ -316,9 +316,10 @@ describe('sendToWorker implementation guards', () => {
     expect(source).toContain("await sendKey('C-u')");
   });
 
-  it('re-checks copy-mode before adaptive and fail-open fallback keys', () => {
+  it('re-checks copy-mode before adaptive and final fallback keys', () => {
     expect(source).toContain('Safety gate: copy-mode can turn on while we retry');
     expect(source).toContain('Before fallback control keys, re-check copy-mode');
+    expect(source).toContain('Fail-closed: final nudge attempt');
   });
 });
 

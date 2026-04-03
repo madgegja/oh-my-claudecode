@@ -2039,7 +2039,7 @@ function paneLooksReady(captured) {
 }
 async function waitForPaneReady(paneId, opts = {}) {
   const envTimeout = Number.parseInt(process.env.OMC_SHELL_READY_TIMEOUT_MS ?? "", 10);
-  const timeoutMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs ?? 0) > 0 ? Number(opts.timeoutMs) : Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 1e4;
+  const timeoutMs = Number.isFinite(opts.timeoutMs) && (opts.timeoutMs ?? 0) > 0 ? Number(opts.timeoutMs) : Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 3e4;
   const pollIntervalMs = Number.isFinite(opts.pollIntervalMs) && (opts.pollIntervalMs ?? 0) > 0 ? Number(opts.pollIntervalMs) : 250;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -2156,7 +2156,8 @@ async function sendToWorker(_sessionName, paneId, message) {
     await sendKey("C-m");
     await sleep3(120);
     await sendKey("C-m");
-    return true;
+    const finalCheckCapture = await capturePaneAsync(paneId, execFileAsync2);
+    return !paneTailContainsLiteralLine(finalCheckCapture, message);
   } catch {
     return false;
   }
@@ -4836,7 +4837,7 @@ async function waitForWorkerStartupEvidence(teamName, workerName, taskId, cwd, a
   }
   return false;
 }
-async function spawnV2Worker(opts) {
+async function launchV2WorkerPane(opts) {
   const { execFile: execFile4 } = await import("child_process");
   const { promisify: promisify3 } = await import("util");
   const execFileAsync2 = promisify3(execFile4);
@@ -4856,7 +4857,21 @@ async function spawnV2Worker(opts) {
   ]);
   const paneId = splitResult.stdout.split("\n")[0]?.trim();
   if (!paneId) {
-    return { paneId: null, startupAssigned: false, startupFailureReason: "pane_id_missing" };
+    return {
+      paneId: null,
+      teamName: opts.teamName,
+      workerName: opts.workerName,
+      workerIndex: opts.workerIndex,
+      agentType: opts.agentType,
+      task: opts.task,
+      taskId: opts.taskId,
+      cwd: opts.cwd,
+      sessionName: opts.sessionName,
+      usePromptMode: false,
+      instruction: "",
+      inboxTriggerMessage: "",
+      startupFailureReason: "pane_id_missing"
+    };
   }
   const usePromptMode = isPromptModeAgent(opts.agentType);
   const instruction = buildV2TaskInstruction(
@@ -4912,9 +4927,34 @@ async function spawnV2Worker(opts) {
     ]);
   } catch {
   }
-  if (!usePromptMode) {
-    const paneReady = await waitForPaneReady(paneId);
-    if (!paneReady) {
+  return {
+    paneId,
+    teamName: opts.teamName,
+    workerName: opts.workerName,
+    workerIndex: opts.workerIndex,
+    agentType: opts.agentType,
+    task: opts.task,
+    taskId: opts.taskId,
+    cwd: opts.cwd,
+    sessionName: opts.sessionName,
+    usePromptMode,
+    instruction,
+    inboxTriggerMessage
+  };
+}
+async function finalizePreparedV2WorkerStartup(prepared, options = {}) {
+  const { paneReady = false } = options;
+  const paneId = prepared.paneId;
+  if (!paneId) {
+    return {
+      paneId: null,
+      startupAssigned: false,
+      ...prepared.startupFailureReason ? { startupFailureReason: prepared.startupFailureReason } : {}
+    };
+  }
+  if (!prepared.usePromptMode && !paneReady) {
+    const ready = await waitForPaneReady(paneId);
+    if (!ready) {
       return {
         paneId,
         startupAssigned: false,
@@ -4923,28 +4963,28 @@ async function spawnV2Worker(opts) {
     }
   }
   const dispatchOutcome = await queueInboxInstruction({
-    teamName: opts.teamName,
-    workerName: opts.workerName,
-    workerIndex: opts.workerIndex + 1,
+    teamName: prepared.teamName,
+    workerName: prepared.workerName,
+    workerIndex: prepared.workerIndex + 1,
     paneId,
-    inbox: instruction,
-    triggerMessage: inboxTriggerMessage,
-    cwd: opts.cwd,
-    transportPreference: usePromptMode ? "prompt_stdin" : "transport_direct",
+    inbox: prepared.instruction,
+    triggerMessage: prepared.inboxTriggerMessage,
+    cwd: prepared.cwd,
+    transportPreference: prepared.usePromptMode ? "prompt_stdin" : "transport_direct",
     fallbackAllowed: false,
-    inboxCorrelationKey: `startup:${opts.workerName}:${opts.taskId}`,
+    inboxCorrelationKey: `startup:${prepared.workerName}:${prepared.taskId}`,
     notify: async (_target, triggerMessage) => {
-      if (usePromptMode) {
+      if (prepared.usePromptMode) {
         return { ok: true, transport: "prompt_stdin", reason: "prompt_mode_launch_args" };
       }
-      if (opts.agentType === "gemini") {
-        const confirmed = await notifyPaneWithRetry(opts.sessionName, paneId, "1");
+      if (prepared.agentType === "gemini") {
+        const confirmed = await notifyPaneWithRetry(prepared.sessionName, paneId, "1");
         if (!confirmed) {
           return { ok: false, transport: "tmux_send_keys", reason: "worker_notify_failed:trust-confirm" };
         }
         await new Promise((r) => setTimeout(r, 800));
       }
-      return notifyStartupInbox(opts.sessionName, paneId, triggerMessage);
+      return notifyStartupInbox(prepared.sessionName, paneId, triggerMessage);
     },
     deps: {
       writeWorkerInbox
@@ -4957,15 +4997,15 @@ async function spawnV2Worker(opts) {
       startupFailureReason: dispatchOutcome.reason
     };
   }
-  if (opts.agentType === "claude") {
+  if (prepared.agentType === "claude") {
     const settled = await waitForWorkerStartupEvidence(
-      opts.teamName,
-      opts.workerName,
-      opts.taskId,
-      opts.cwd
+      prepared.teamName,
+      prepared.workerName,
+      prepared.taskId,
+      prepared.cwd
     );
     if (!settled) {
-      const renotified = await notifyStartupInbox(opts.sessionName, paneId, inboxTriggerMessage);
+      const renotified = await notifyStartupInbox(prepared.sessionName, paneId, prepared.inboxTriggerMessage);
       if (!renotified.ok) {
         return {
           paneId,
@@ -4974,10 +5014,10 @@ async function spawnV2Worker(opts) {
         };
       }
       const settledAfterRetry = await waitForWorkerStartupEvidence(
-        opts.teamName,
-        opts.workerName,
-        opts.taskId,
-        opts.cwd
+        prepared.teamName,
+        prepared.workerName,
+        prepared.taskId,
+        prepared.cwd
       );
       if (!settledAfterRetry) {
         return {
@@ -4988,18 +5028,18 @@ async function spawnV2Worker(opts) {
       }
     }
   }
-  if (usePromptMode) {
+  if (prepared.usePromptMode) {
     const settled = await waitForWorkerStartupEvidence(
-      opts.teamName,
-      opts.workerName,
-      opts.taskId,
-      opts.cwd
+      prepared.teamName,
+      prepared.workerName,
+      prepared.taskId,
+      prepared.cwd
     );
     if (!settled) {
       return {
         paneId,
         startupAssigned: false,
-        startupFailureReason: `${opts.agentType}_startup_evidence_missing`
+        startupFailureReason: `${prepared.agentType}_startup_evidence_missing`
       };
     }
   }
@@ -5155,13 +5195,14 @@ async function startTeamV2(config) {
     seenStartupWorkers.add(decision.workerName);
     if (initialStartupAllocations.length >= config.workerCount) break;
   }
+  const preparedWorkerLaunches = [];
   for (const decision of initialStartupAllocations) {
     const wName = decision.workerName;
     const workerIndex = Number.parseInt(wName.replace("worker-", ""), 10) - 1;
     const taskId = String(decision.taskIndex + 1);
     const task = config.tasks[decision.taskIndex];
     if (!task || workerIndex < 0) continue;
-    const workerLaunch = await spawnV2Worker({
+    const workerLaunch = await launchV2WorkerPane({
       sessionName: sessionName2,
       leaderPaneId,
       existingWorkerPaneIds: workerPaneIds,
@@ -5179,16 +5220,58 @@ async function startTeamV2(config) {
       const workerInfo = workersInfo[workerIndex];
       if (workerInfo) {
         workerInfo.pane_id = workerLaunch.paneId;
-        workerInfo.assigned_tasks = workerLaunch.startupAssigned ? [taskId] : [];
+        workerInfo.assigned_tasks = [];
       }
     }
-    if (workerLaunch.startupFailureReason) {
+    preparedWorkerLaunches.push(workerLaunch);
+  }
+  const recordStartupResult = async (workerLaunch, startupResult) => {
+    const workerInfo = workersInfo[workerLaunch.workerIndex];
+    if (workerInfo) {
+      workerInfo.assigned_tasks = startupResult.startupAssigned ? [workerLaunch.taskId] : [];
+    }
+    if (startupResult.startupFailureReason) {
       await appendTeamEvent(sanitized, {
         type: "team_leader_nudge",
         worker: "leader-fixed",
-        reason: `startup_manual_intervention_required:${wName}:${workerLaunch.startupFailureReason}`
+        reason: `startup_manual_intervention_required:${workerLaunch.workerName}:${startupResult.startupFailureReason}`
       }, leaderCwd);
     }
+  };
+  const failedPrelaunchWorkers = preparedWorkerLaunches.filter(
+    (workerLaunch) => !workerLaunch.paneId || workerLaunch.startupFailureReason
+  );
+  for (const failedPrelaunch of failedPrelaunchWorkers) {
+    await recordStartupResult(failedPrelaunch, {
+      paneId: failedPrelaunch.paneId,
+      startupAssigned: false,
+      startupFailureReason: failedPrelaunch.startupFailureReason ?? "worker_launch_failed"
+    });
+  }
+  const readyPhaseWorkers = preparedWorkerLaunches.filter(
+    (workerLaunch) => Boolean(workerLaunch.paneId) && !workerLaunch.startupFailureReason
+  );
+  const promptModePrepared = readyPhaseWorkers.filter((worker) => worker.usePromptMode);
+  const interactivePrepared = readyPhaseWorkers.filter((worker) => !worker.usePromptMode);
+  for (const prepared of promptModePrepared) {
+    const startupResult = await finalizePreparedV2WorkerStartup(prepared);
+    await recordStartupResult(prepared, startupResult);
+  }
+  const pendingInteractiveStarts = new Map(
+    interactivePrepared.map((prepared) => [
+      prepared.workerName,
+      waitForPaneReady(prepared.paneId).then((paneReady) => ({ prepared, paneReady }))
+    ])
+  );
+  while (pendingInteractiveStarts.size > 0) {
+    const { prepared, paneReady } = await Promise.race(pendingInteractiveStarts.values());
+    pendingInteractiveStarts.delete(prepared.workerName);
+    const startupResult = paneReady ? await finalizePreparedV2WorkerStartup(prepared, { paneReady: true }) : {
+      paneId: prepared.paneId,
+      startupAssigned: false,
+      startupFailureReason: "worker_pane_not_ready"
+    };
+    await recordStartupResult(prepared, startupResult);
   }
   teamConfig.workers = workersInfo;
   await saveTeamConfig(teamConfig, leaderCwd);
