@@ -28,8 +28,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Verify generated artifacts are up to date
-        run: npm run check:generated-artifacts
+      - name: Verify dist artifacts are up to date
+        run: npm run check:dist-sync
 
       - name: Run tests
         run: npm test -- --run

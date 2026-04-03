@@ -39,7 +39,7 @@
   ],
   "scripts": {
     "build": "tsc && node scripts/build-skill-bridge.mjs && node scripts/build-mcp-server.mjs && node scripts/build-bridge-entry.mjs && npm run compose-docs && npm run build:runtime-cli && npm run build:team-server && npm run build:cli",
-    "check:generated-artifacts": "git diff --exit-code -- dist bridge docs/CLAUDE.md",
+    "check:dist-sync": "git diff --exit-code -- dist",
     "build:bridge": "node scripts/build-skill-bridge.mjs",
     "build:bridge-entry": "node scripts/build-bridge-entry.mjs",
     "build:cli": "node scripts/build-cli.mjs",
