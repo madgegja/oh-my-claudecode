@@ -792,12 +792,8 @@ async function main() {
 
       if (contextPercent >= PREFLIGHT_CONTEXT_THRESHOLD) {
         console.log(JSON.stringify({
-          continue: true,
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'deny',
-            permissionDecisionReason: buildPreflightRecoveryAdvice(contextPercent),
-          }
+          decision: 'block',
+          reason: buildPreflightRecoveryAdvice(contextPercent),
         }));
         return;
       }

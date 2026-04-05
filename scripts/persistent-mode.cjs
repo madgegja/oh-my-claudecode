@@ -548,16 +548,14 @@ const CRITICAL_CONTEXT_STOP_PERCENT = 95;
 function estimateContextPercent(transcriptPath) {
   if (!transcriptPath || !existsSync(transcriptPath)) return 0;
 
-  let fd = -1;
   try {
     const size = statSync(transcriptPath).size;
     const readSize = 4096;
     const offset = Math.max(0, size - readSize);
     const buf = Buffer.alloc(Math.min(readSize, size));
-    fd = openSync(transcriptPath, "r");
+    const fd = openSync(transcriptPath, "r");
     readSync(fd, buf, 0, buf.length, offset);
     closeSync(fd);
-    fd = -1;
     const content = buf.toString("utf-8");
 
     const windowMatch = content.match(/"context_window"\s{0,5}:\s{0,5}(\d+)/g);
@@ -570,8 +568,6 @@ function estimateContextPercent(transcriptPath) {
     return Math.round((lastInput / lastWindow) * 100);
   } catch {
     return 0;
-  } finally {
-    if (fd !== -1) try { closeSync(fd); } catch { /* best-effort */ }
   }
 }
 
