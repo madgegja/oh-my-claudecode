@@ -5,7 +5,7 @@
  * Based on claude-hud reference implementation.
  *
  * Performance optimizations:
- * - Tail-based parsing: reads only the last ~500KB of large transcripts
+ * - Tail-based parsing: reads only a recent transcript tail for large files
  * - Bounded agent map: caps at 50 agents during parsing
  * - Early termination: stops when enough running agents found
  */
@@ -14,7 +14,7 @@ import type { TranscriptData, ActiveAgent, TodoItem } from "./types.js";
  * Parse a Claude Code transcript JSONL file.
  * Extracts running agents and latest todo list.
  *
- * For large files (>500KB), only parses the tail portion for performance.
+ * For large files, only parses a recent tail portion for performance.
  */
 export interface ParseTranscriptOptions {
     staleTaskThresholdMinutes?: number;

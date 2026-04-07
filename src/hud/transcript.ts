@@ -5,7 +5,7 @@
  * Based on claude-hud reference implementation.
  *
  * Performance optimizations:
- * - Tail-based parsing: reads only the last ~500KB of large transcripts
+ * - Tail-based parsing: reads only a recent transcript tail for large files
  * - Bounded agent map: caps at 50 agents during parsing
  * - Early termination: stops when enough running agents found
  */
@@ -28,11 +28,8 @@ import type {
   LastRequestTokenUsage,
 } from "./types.js";
 
-// Performance constants
-// 4MB tail window: enough to catch the full tool_use → tool_result → task-notification
-// chain for agent-heavy sessions (typically ~30-50KB per agent call, so 4MB covers
-// ~80-130 agents). The previous 512KB window lost completion signals for older
-// agents in long sessions, leaving them stuck as "running" in the HUD.
+// Performance constants. Use a 4MB tail window so long sessions still include
+// the tool_use → tool_result → task-notification chain for background agents.
 const MAX_TAIL_BYTES = 4 * 1024 * 1024;
 const MAX_AGENT_MAP_SIZE = 100; // Cap agent tracking
 const _MIN_RUNNING_AGENTS_THRESHOLD = 10; // Early termination threshold
@@ -86,7 +83,7 @@ const TRANSCRIPT_CACHE_MAX_SIZE = 20;
  * Parse a Claude Code transcript JSONL file.
  * Extracts running agents and latest todo list.
  *
- * For large files (>500KB), only parses the tail portion for performance.
+ * For large files, only parses a recent tail portion for performance.
  */
 export interface ParseTranscriptOptions {
   staleTaskThresholdMinutes?: number;
@@ -360,11 +357,7 @@ function extractBackgroundAgentId(
 }
 
 /**
- * Parse TaskOutput result for completion status.
- *
- * Claude Code emits completion as a `<task-notification>` block with
- * hyphen-cased tags (`<task-id>`, `<tool-use-id>`, `<status>`). Accept
- * both hyphen and underscore variants for defence in depth.
+ * Parse TaskOutput completion status, accepting both hyphen and underscore tags.
  */
 function parseTaskOutputResult(
   content: string | Array<{ type?: string; text?: string }>,
@@ -460,13 +453,7 @@ function processEntry(
 
   const content = entry.message?.content;
 
-  // Claude Code emits background-agent completion as a user-role message with
-  // string-shaped content: `<task-notification>...<tool-use-id>...</tool-use-id>
-  // ...<status>completed</status>...</task-notification>`. The block-based
-  // parser below only handles array-shaped content, so we handle the string
-  // case up front — otherwise background agents (subagents launched with
-  // run_in_background, Explore/Plan/general-purpose, etc.) never transition
-  // from "running" to "completed" in the HUD.
+  // Handle string-shaped task-notification payloads before the array-block path.
   if (typeof content === "string") {
     if (content.includes("<task-notification>") || content.includes("<task_id>") || content.includes("<task-id>")) {
       const taskOutput = parseTaskOutputResult(content);
@@ -591,18 +578,9 @@ function processEntry(
       if (agent) {
         const blockContent = block.content;
 
-        // Check if this is a background agent launch result.
-        //
-        // The real "Async agent launched successfully" notification is a
-        // short (~400B), standalone tool_result whose text STARTS with the
-        // exact phrase. A completed foreground agent result can easily
-        // contain the same phrase quoted elsewhere (e.g. an investigation
-        // report that cites a previous launch message), so a naive
-        // `.includes()` check misclassifies legitimate completions as
-        // background launches and leaves them stuck as "running" in the HUD.
-        //
-        // Require the text to START WITH "Async agent launched" (after
-        // trimming leading whitespace) — nothing else qualifies.
+        // Background launches emit a short standalone result starting with
+        // "Async agent launched"; quoted mentions inside normal results should
+        // not keep the agent marked as running.
         const ASYNC_LAUNCH_PREFIX = "Async agent launched";
         const startsWithAsyncLaunch = (text: string | undefined): boolean =>
           !!text && text.trimStart().startsWith(ASYNC_LAUNCH_PREFIX);
