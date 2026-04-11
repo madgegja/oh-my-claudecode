@@ -9,6 +9,7 @@
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const PSM_ROOT = join(__dirname, '../../skills/project-session-manager');
 const TMUX_SH = join(PSM_ROOT, 'lib/tmux.sh');
