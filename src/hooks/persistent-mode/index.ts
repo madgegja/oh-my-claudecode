@@ -446,6 +446,159 @@ function readTranscriptTail(transcriptPath: string): string {
   }
 }
 
+function readTranscriptTailLines(transcriptPath: string): string[] {
+  const content = readTranscriptTail(transcriptPath);
+  const lines = content.split('\n');
+
+  try {
+    if (statSync(transcriptPath).size > TRANSCRIPT_TAIL_BYTES && lines.length > 0) {
+      lines.shift();
+    }
+  } catch {
+    return lines;
+  }
+
+  return lines;
+}
+
+type TranscriptContentBlock = {
+  type?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+  tool_use_id?: string;
+  content?: unknown;
+};
+
+type TranscriptApprovalEntry = {
+  message?: {
+    content?: TranscriptContentBlock[] | string;
+  };
+};
+
+type ReviewerApprovalPath = 'architect' | 'critic' | 'codex';
+
+const REVIEWER_TASK_TOOL_NAMES = new Set(['Task', 'proxy_Task', 'Agent']);
+const REVIEWER_COMMAND_TOOL_NAMES = new Set(['Bash', 'proxy_Bash']);
+
+function normalizeReviewerPath(subagentType: unknown): ReviewerApprovalPath | null {
+  if (typeof subagentType !== 'string') {
+    return null;
+  }
+
+  const normalized = subagentType.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const baseName = normalized.includes(':')
+    ? normalized.slice(normalized.lastIndexOf(':') + 1)
+    : normalized;
+
+  if (baseName === 'architect' || baseName.startsWith('architect-')) {
+    return 'architect';
+  }
+
+  if (baseName === 'critic' || baseName.startsWith('critic-')) {
+    return 'critic';
+  }
+
+  return null;
+}
+
+function isCodexReviewerCommand(command: unknown): boolean {
+  return typeof command === 'string'
+    && /\bask\s+codex\s+--agent-prompt\s+critic\b/i.test(command);
+}
+
+function extractTranscriptText(content: unknown): string {
+  if (typeof content === 'string') {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    return content.map((item) => extractTranscriptText(item)).filter(Boolean).join('\n');
+  }
+
+  if (!content || typeof content !== 'object') {
+    return '';
+  }
+
+  const record = content as Record<string, unknown>;
+  const directText = typeof record.text === 'string' ? record.text : '';
+  const nestedContent = 'content' in record ? extractTranscriptText(record.content) : '';
+  return [directText, nestedContent].filter(Boolean).join('\n');
+}
+
+function matchesVerificationReviewerPath(
+  reviewerPath: ReviewerApprovalPath,
+  verificationState?: Pick<VerificationState, 'critic_mode'>
+): boolean {
+  const expected = verificationState?.critic_mode ?? 'architect';
+  return reviewerPath === expected;
+}
+
+function checkReviewerAuthoredApprovalInMessages(
+  transcriptPath: string,
+  verificationState?: Pick<VerificationState, 'request_id' | 'story_id' | 'critic_mode'>
+): boolean {
+  const reviewerToolUses = new Map<string, ReviewerApprovalPath>();
+
+  for (const line of readTranscriptTailLines(transcriptPath)) {
+    if (!line.trim()) {
+      continue;
+    }
+
+    let entry: TranscriptApprovalEntry;
+    try {
+      entry = JSON.parse(line) as TranscriptApprovalEntry;
+    } catch {
+      continue;
+    }
+
+    const content = entry.message?.content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+
+    for (const block of content) {
+      if (block?.type === 'tool_use' && block.id && block.name) {
+        if (REVIEWER_TASK_TOOL_NAMES.has(block.name)) {
+          const reviewerPath = normalizeReviewerPath((block.input as Record<string, unknown> | undefined)?.subagent_type);
+          if (reviewerPath && matchesVerificationReviewerPath(reviewerPath, verificationState)) {
+            reviewerToolUses.set(block.id, reviewerPath);
+          }
+          continue;
+        }
+
+        if (REVIEWER_COMMAND_TOOL_NAMES.has(block.name)) {
+          const command = (block.input as Record<string, unknown> | undefined)?.command;
+          if (isCodexReviewerCommand(command) && matchesVerificationReviewerPath('codex', verificationState)) {
+            reviewerToolUses.set(block.id, 'codex');
+          }
+        }
+
+        continue;
+      }
+
+      if (block?.type !== 'tool_result' || !block.tool_use_id) {
+        continue;
+      }
+
+      if (!reviewerToolUses.has(block.tool_use_id)) {
+        continue;
+      }
+
+      const reviewerOutput = extractTranscriptText(block.content);
+      if (reviewerOutput && detectArchitectApproval(reviewerOutput, verificationState)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function estimateTranscriptContextPercent(transcriptPath?: string): number {
   if (!transcriptPath || !existsSync(transcriptPath)) {
     return 0;
@@ -517,27 +670,25 @@ function isAwaitingConfirmation(state: unknown): boolean {
  */
 function checkArchitectApprovalInTranscript(
   sessionId: string,
-  verificationState?: Pick<VerificationState, 'request_id' | 'story_id'>
+  verificationState?: Pick<VerificationState, 'request_id' | 'story_id' | 'critic_mode'>
 ): boolean {
   const claudeDir = getClaudeConfigDir();
-  const possiblePaths = [
-    join(claudeDir, 'sessions', sessionId, 'transcript.md'),
-    join(claudeDir, 'sessions', sessionId, 'messages.json'),
-    join(claudeDir, 'transcripts', `${sessionId}.md`)
-  ];
+  const possiblePaths = [join(claudeDir, 'sessions', sessionId, 'messages.json')];
 
   for (const transcriptPath of possiblePaths) {
-    if (existsSync(transcriptPath)) {
-      try {
-        const content = readTranscriptTail(transcriptPath);
-        if (detectArchitectApproval(content, verificationState)) {
-          return true;
-        }
-      } catch {
-        continue;
+    if (!existsSync(transcriptPath)) {
+      continue;
+    }
+
+    try {
+      if (checkReviewerAuthoredApprovalInMessages(transcriptPath, verificationState)) {
+        return true;
       }
+    } catch {
+      continue;
     }
   }
+
   return false;
 }
 
