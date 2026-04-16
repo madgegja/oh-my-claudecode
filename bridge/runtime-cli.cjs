@@ -2939,7 +2939,7 @@ function sanitizePromptContent(content, maxLength = 4e3) {
       sanitized = sanitized.slice(0, -1);
     }
   }
-  sanitized = sanitized.replace(/<(\/?)(system-instructions|system-reminder|TASK_SUBJECT|TASK_DESCRIPTION|INBOX_MESSAGE|INSTRUCTIONS|SYSTEM|system|role|context)[^>]*>/gi, "[$1$2]");
+  sanitized = sanitized.replace(/<(\/?)(system-instructions|system-reminder|TASK_SUBJECT|TASK_DESCRIPTION|INBOX_MESSAGE)(?=[\s>/])[^>]*>/gi, "[$1$2]");
   return sanitized;
 }
 

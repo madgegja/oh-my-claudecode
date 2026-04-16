@@ -42,6 +42,7 @@ import {
   findPermissionViolations,
 } from "./permissions.js";
 import { getBuiltinExternalDefaultModel } from "../config/models.js";
+import { sanitizePromptContent as sanitizeSharedPromptContent } from "../agents/prompt-helpers.js";
 import type { WorkerPermissions, PermissionViolation } from "./permissions.js";
 import { getTeamStatus } from "./team-status.js";
 import { measureCharCounts, recordTaskUsage } from "./usage-tracker.js";
@@ -212,20 +213,7 @@ export function sanitizePromptContent(
   content: string,
   maxLength: number,
 ): string {
-  let sanitized =
-    content.length > maxLength ? content.slice(0, maxLength) : content;
-  // If truncation split a surrogate pair, remove the dangling high surrogate
-  if (sanitized.length > 0) {
-    const lastCode = sanitized.charCodeAt(sanitized.length - 1);
-    if (lastCode >= 0xd800 && lastCode <= 0xdbff) {
-      sanitized = sanitized.slice(0, -1);
-    }
-  }
-  // Escape XML-like tags that match prompt structural delimiters.
-  // Uses an explicit allowlist to avoid mangling legitimate code content
-  // (HTML tags, TypeScript generics like Promise<Result<T>>, etc.)
-  sanitized = sanitized.replace(/<(\/?)(system-instructions|system-reminder|TASK_SUBJECT|TASK_DESCRIPTION|INBOX_MESSAGE|INSTRUCTIONS|SYSTEM|system|role|context)[^>]*>/gi, "[$1$2]");
-  return sanitized;
+  return sanitizeSharedPromptContent(content, maxLength);
 }
 
 /** Format the prompt template with sanitized content */
