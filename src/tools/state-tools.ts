@@ -35,7 +35,7 @@ import { ToolDefinition } from './types.js';
 
 // ExecutionMode from mode-registry (5 modes)
 const EXECUTION_MODES: [string, ...string[]] = [
-  'autopilot', 'team', 'ralph', 'ultrawork', 'ultraqa'
+  'autopilot', 'autoresearch', 'team', 'ralph', 'ultrawork', 'ultraqa'
 ];
 
 // Extended type for state tools - includes state-bearing modes outside mode-registry

@@ -74,6 +74,7 @@ const PROTECTION_CONFIGS: Record<SkillProtectionLevel, SkillStateConfig> = {
 const SKILL_PROTECTION: Record<string, SkillProtectionLevel> = {
   // === Already have mode state → no additional protection ===
   autopilot: 'none',
+  autoresearch: 'none',
   ralph: 'none',
   ultrawork: 'none',
   team: 'none',
