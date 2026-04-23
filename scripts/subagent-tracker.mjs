@@ -6,6 +6,13 @@ import { readStdin } from './lib/stdin.mjs';
 async function main() {
   const action = process.argv[2]; // 'start' or 'stop'
 
+  // Skip guard: respect OMC_SKIP_HOOKS (consistent with keyword-detector / pre-tool-enforcer / post-tool-verifier, see issue #838)
+  const _skipHooks = (process.env.OMC_SKIP_HOOKS || '').split(',').map(s => s.trim());
+  if (process.env.DISABLE_OMC === '1' || _skipHooks.includes('subagent-tracker') || _skipHooks.includes('subagent') || (action === 'start' && _skipHooks.includes('subagent-start')) || (action === 'stop' && _skipHooks.includes('subagent-stop'))) {
+    console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+    return;
+  }
+
   // Read stdin (timeout-protected, see issue #240/#459)
   const input = await readStdin();
 

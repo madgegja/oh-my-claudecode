@@ -219,6 +219,13 @@ function buildStopRecoveryAdvice(contextPercent, blockCount) {
 }
 
 async function main() {
+  // Skip guard: respect OMC_SKIP_HOOKS (consistent with keyword-detector / pre-tool-enforcer / post-tool-verifier, see issue #838)
+  const _skipHooks = (process.env.OMC_SKIP_HOOKS || '').split(',').map(s => s.trim());
+  if (process.env.DISABLE_OMC === '1' || _skipHooks.includes('context-guard-stop') || _skipHooks.includes('stop')) {
+    console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+    return;
+  }
+
   try {
     const input = await readStdin();
     const data = JSON.parse(input);

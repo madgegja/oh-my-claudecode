@@ -365,6 +365,13 @@ async function checkHudInstallation(retryCount = 0) {
 
 // Main
 async function main() {
+  // Skip guard: respect OMC_SKIP_HOOKS (consistent with keyword-detector / pre-tool-enforcer / post-tool-verifier, see issue #838)
+  const _skipHooks = (process.env.OMC_SKIP_HOOKS || '').split(',').map(s => s.trim());
+  if (process.env.DISABLE_OMC === '1' || _skipHooks.includes('session-start')) {
+    console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+    return;
+  }
+
   try {
     const input = await readStdin();
     let data = {};
